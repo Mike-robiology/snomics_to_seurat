@@ -1,8 +1,16 @@
-FROM rocker/r-ver:4.0.0
+FROM rocker/r-ver:4.2.1
 
 RUN install2.r --error \
     littler \
-    BiocManager \
+    BiocManager
+
+RUN installBioc.r --error \
+    EnsDb.Hsapiens.v86 \
+    BSgenome.Hsapiens.UCSC.hg38 \
+    GenomicRanges \
+    && rm -rf /tmp/downloaded_packages
+
+RUN install2.r --error \
     tidyverse \
     Signac \
     Seurat \
@@ -11,10 +19,4 @@ RUN install2.r --error \
     assertthat \
     future \
     argparse \
-    && rm -rf /tmp/downloaded_packages
-
-RUN installBioc.r --error \
-    EnsDb.Hsapiens.v86 \
-    BSgenome.Hsapiens.UCSC.hg38 \
-    GenomicRanges \
     && rm -rf /tmp/downloaded_packages
