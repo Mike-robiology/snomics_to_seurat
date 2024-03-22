@@ -7,6 +7,10 @@ libbz2-dev \
 libcurl4-openssl-dev \
 libxml2-dev
 
+COPY conf/bioc-requirements.r .
+RUN Rscript -e 'requireNamespace("BiocManager"); BiocManager::install(ask=F);' \
+&& Rscript bioc-requirements.r
+
 RUN install2.r --error \
 littler \
 BiocManager \
@@ -19,9 +23,5 @@ assertthat \
 future \
 argparse \
 && rm -rf /tmp/downloaded_packages
-
-COPY conf/bioc-requirements.r .
-RUN Rscript -e 'requireNamespace("BiocManager"); BiocManager::install(ask=F);' \
-&& Rscript bioc-requirements.r
 
 
