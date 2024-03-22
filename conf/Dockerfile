@@ -5,14 +5,14 @@ libz-dev \
 liblzma-dev \
 libbz2-dev \
 libcurl4-openssl-dev \
-libxml2-dev
+libxml2-dev \
+libgeos-dev
 
 COPY conf/bioc-requirements.r .
 RUN Rscript bioc-requirements.r
 
 RUN install2.r --error \
 littler \
-BiocManager \
 tidyverse \
 Signac \
 Seurat \
@@ -22,5 +22,3 @@ assertthat \
 future \
 argparse \
 && rm -rf /tmp/downloaded_packages
-
-
