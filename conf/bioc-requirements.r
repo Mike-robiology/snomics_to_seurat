@@ -4,5 +4,6 @@ bioc_pkgs<-c(
     "GenomicRanges"
 )
 
+install.packages("BiocManager")
 requireNamespace("BiocManager")
 BiocManager::install(bioc_pkgs,ask=F)
