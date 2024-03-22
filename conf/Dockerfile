@@ -1,9 +1,7 @@
-FROM rocker/tidyverse:4.2.1
+FROM rocker/r-ver:4.0.0
 
-# Install R packages
 RUN install2.r --error \
-    --deps TRUE \
-    --ncpus -1 \
+    tidyverse \
     Signac \
     Seurat \
     SeuratObject \
@@ -14,8 +12,6 @@ RUN install2.r --error \
     && rm -rf /tmp/downloaded_packages
 
 RUN installBioc.r --error \
-    --deps TRUE \
-    --ncpus -1 \
     EnsDb.Hsapiens.v86 \
     BSgenome.Hsapiens.UCSC.hg38 \
     GenomicRanges \
