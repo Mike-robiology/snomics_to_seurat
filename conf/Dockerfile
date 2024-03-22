@@ -5,7 +5,7 @@ RUN install2.r --error \
     BiocManager \
     && rm -rf /tmp/downloaded_packages
 
-COPY requirements-bioc.R .
+COPY conf/requirements-bioc.R .
 RUN Rscript -e 'requireNamespace("BiocManager"); BiocManager::install(ask=F);' \
 && Rscript requirements-bioc.R \
 && rm -rf /tmp/downloaded_packages
