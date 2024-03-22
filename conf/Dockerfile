@@ -4,7 +4,8 @@ RUN apt-get update && apt-get install -y \
 libz-dev \
 liblzma-dev \
 libbz2-dev \
-libcurl4-openssl-dev
+libcurl4-openssl-dev \
+libxml2-dev
 
 RUN install2.r --error \
 littler \
