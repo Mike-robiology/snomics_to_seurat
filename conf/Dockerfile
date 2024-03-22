@@ -1,7 +1,8 @@
 FROM rocker/r-ver:4.2.1
 
 RUN apt-get update && apt-get install -y \
-libz-dev
+libz-dev \
+liblzma-dev
 
 RUN install2.r --error \
 littler \
