@@ -1,4 +1,4 @@
-FROM rocker/r-ver:4.2.1
+FROM rocker/tidyverse:4.2.1
 
 RUN install2.r --error \
     littler \
