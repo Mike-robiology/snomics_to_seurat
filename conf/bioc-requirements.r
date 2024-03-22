@@ -1,6 +1,6 @@
 bioc_pkgs<-c(
     "EnsDb.Hsapiens.v86",
-    "BSgenome.Hsapiens.UCSC.hg38"
+    "BSgenome.Hsapiens.UCSC.hg38",
     "GenomicRanges"
 )
 
