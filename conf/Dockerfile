@@ -4,7 +4,7 @@ RUN install2.r --error \
     littler \
     BiocManager
 
-RUN installBioc.r --error \
+RUN /usr/local/lib/R/site-library/littler/examples/installBioc.r --error \
     EnsDb.Hsapiens.v86 \
     BSgenome.Hsapiens.UCSC.hg38 \
     GenomicRanges \
