@@ -3,7 +3,8 @@ FROM rocker/r-ver:4.2.1
 RUN apt-get update && apt-get install -y \
 libz-dev \
 liblzma-dev \
-libbz2-dev
+libbz2-dev \
+libcurl4-openssl-dev
 
 RUN install2.r --error \
 littler \
