@@ -8,8 +8,7 @@ libcurl4-openssl-dev \
 libxml2-dev
 
 COPY conf/bioc-requirements.r .
-RUN Rscript -e 'requireNamespace("BiocManager"); BiocManager::install(ask=F);' \
-&& Rscript bioc-requirements.r
+RUN Rscript bioc-requirements.r
 
 RUN install2.r --error \
 littler \
