@@ -17,7 +17,7 @@ jobs:
           context: .
           file: conf/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/snomics_to_seurat:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/snomics_to_seurat:latest
       
 
 
