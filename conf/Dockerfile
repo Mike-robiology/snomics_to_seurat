@@ -2,13 +2,13 @@ FROM rocker/r-ver:4.2.1
 
 RUN install2.r --error \
     littler \
-    BiocManager
-
-RUN /usr/local/lib/R/site-library/littler/examples/installBioc.r --error \
-    EnsDb.Hsapiens.v86 \
-    BSgenome.Hsapiens.UCSC.hg38 \
-    GenomicRanges \
+    BiocManager \
     && rm -rf /tmp/downloaded_packages
+
+COPY requirements-bioc.R .
+RUN Rscript -e 'requireNamespace("BiocManager"); BiocManager::install(ask=F);' \
+&& Rscript requirements-bioc.R \
+&& rm -rf /tmp/downloaded_packages
 
 RUN install2.r --error \
     tidyverse \
