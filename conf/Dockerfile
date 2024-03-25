@@ -6,7 +6,8 @@ liblzma-dev \
 libbz2-dev \
 libcurl4-openssl-dev \
 libxml2-dev \
-libgeos-dev
+libgeos-dev \
+libglpk-dev
 
 COPY conf/bioc-requirements.r .
 RUN Rscript bioc-requirements.r
