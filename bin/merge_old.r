@@ -57,8 +57,9 @@ cores <- args$cores |> as.numeric()
 
 ####function####
 merge_seurat <- function(
-  objects_file,
-  sample_column
+    objects_file,
+    cores,
+    sample_column
 ) {
   
   # load
@@ -67,12 +68,76 @@ merge_seurat <- function(
 
   # unnest list
   obj_l <- unlist(obj_l, recursive = FALSE)
-
+  
+  # common feature set
+  message('\n|----- Finding common feature set -----|\n')
+  
+  common_genes <- Reduce(intersect, lapply(obj_l, rownames))
+  all_genes <- Reduce(union, lapply(obj_l, rownames))
+  message(length(common_genes), ' genes expressed in common, of ', length(all_genes), ' genes availible (', round(length(common_genes)/length(all_genes)*100, 3), '%)')
+  
+  merge_peaks <- function(obj_l,
+                          peak_limits = c(20, 10000), 
+                          process_n = 10000) {
+    
+    N <- length(obj_l)
+    metadata_l <- lapply(obj_l, function(x) x@meta.data)
+    bed_paths <- sapply(metadata_l, '[', 1, "bed_file")
+    frags_l <- lapply(obj_l, function(x) x[['ATAC']]@fragments[[1]])
+    annotation <- Annotation(obj_l[[1]][['ATAC']])
+    
+    peaks_l <- lapply(bed_paths, function(x) {
+      read.table(
+        file = x,
+        col.names = c("chr", "start", "end")
+      )
+    })
+    
+    peaks_l <- lapply(peaks_l, makeGRangesFromDataFrame)
+    peaks_l <- do.call('c', peaks_l)
+    combined_peaks <- Signac::reduce(x = peaks_l)
+    peak_widths <- width(combined_peaks)
+    combined_peaks <- combined_peaks[peak_widths > peak_limits[1] & peak_widths < peak_limits[2]]
+    
+    message('\n|----- Recounting peaks -----|\n')
+    gc()
+    peak_counts <- lapply(1:N, function(i) {
+      message(paste0("Rebasing ATAC counts ", i, "/", N))
+      FeatureMatrix(
+        fragments = frags_l[[i]],
+        features = combined_peaks,
+        cells = rownames(metadata_l[[i]]),
+        process_n = process_n
+      )
+    })
+    
+    for (i in 1:N) {
+      c_assay <- CreateChromatinAssay(
+        counts = peak_counts[[i]],
+        fragments = frags_l[[i]],
+        annotation = annotation,
+        sep = c(":", "-"),
+      )
+      obj_l[[i]][['ATAC']] <- c_assay
+    }
+    return(obj_l)
+  }
+  
+  gc()
+  options(future.globals.maxSize = 100*1024^3)
+  plan("multicore", workers = cores)
+  obj_l <- merge_peaks(obj_l)
+  plan("sequential")
+  peaks <- Features(obj_l[[1]], assay = 'ATAC')
+  obj_l <- lapply(obj_l, '[', c(common_genes, peaks))
+  
+  
   message('\n|----- Running merging & integration (Reciprocal projection) -----|\n')
   # merge
   message('Merging objects')
+  gc()
   merged_obj <- merge(obj_l[[1]], y = obj_l[-1])
-
+  
   # preprocess RNA
   message('Preprocessing RNA')
   gc()
@@ -81,7 +146,8 @@ merge_seurat <- function(
     FindVariableFeatures(verbose = FALSE) %>%
     ScaleData(verbose = FALSE) %>%
     RunPCA(verbose = FALSE)
-
+  
+  qs::qsave(merged_obj, "merged_obj.qs")
   # integrate RNA
   message('Integrating RNA (may take a while)')
   gc()
@@ -90,10 +156,9 @@ merge_seurat <- function(
     method = RPCAIntegration,
     orig.reduction = 'pca',
     new.reduction = 'rpca',
-    verbose = TRUE,
-    reference = 1
+    verbose = TRUE
   ) %>% JoinLayers()
-
+  
   # preprocess ATAC
   message('Preprocessing ATAC')
   gc()
@@ -102,7 +167,7 @@ merge_seurat <- function(
     FindTopFeatures(min.cutoff = 10, verbose = FALSE) %>%
     RunTFIDF(verbose = FALSE) %>%
     RunSVD(verbose = FALSE)
-
+  
   # integrate ATAC
   message('Integrating ATAC (may take a while)')
   gc()
@@ -111,27 +176,26 @@ merge_seurat <- function(
     object.list = split_obj,
     anchor.features = rownames(split_obj[[1]]),
     reduction = "rlsi",
-    dims = 2:30,
-    verbose = FALSE,
-    reference = 1
+    dims = 2:50,
+    verbose = FALSE
   )
   atac_integrated <- IntegrateEmbeddings(
     anchorset = atac.anchors,
     reductions = integrated_obj[["lsi"]],
     new.reduction.name = "rlsi",
-    dims.to.integrate = 1:30,
+    dims.to.integrate = 1:50,
     verbose = FALSE
   )
   integrated_obj[['rlsi']] <- atac_integrated[['rlsi']]
   DefaultAssay(integrated_obj) <- 'RNA'
-
+  
   # generate UMAP
   message('Generating UMAPs')
   gc()
   integrated_obj <- integrated_obj %>%
-    RunUMAP(reduction = "rpca", dims = 1:30, reduction.name = "umap.rna", reduction.key = "rnaUMAP_", verbose = FALSE) %>%
-    RunUMAP(reduction = "rlsi", dims = 2:30, reduction.name = "umap.atac", reduction.key = "atacUMAP_", verbose = FALSE) %>%
-    FindMultiModalNeighbors(reduction.list = list("rpca", "rlsi"), dims.list = list(1:30, 2:30), verbose = FALSE) %>%
+    RunUMAP(reduction = "rpca", dims = 1:50, reduction.name = "umap.rna", reduction.key = "rnaUMAP_", verbose = FALSE) %>%
+    RunUMAP(reduction = "rlsi", dims = 2:50, reduction.name = "umap.atac", reduction.key = "atacUMAP_", verbose = FALSE) %>%
+    FindMultiModalNeighbors(reduction.list = list("rpca", "rlsi"), dims.list = list(1:50, 2:50), verbose = FALSE) %>%
     RunUMAP(nn.name = "weighted.nn", reduction.name = "umap.wnn", reduction.key = "wnnUMAP_", verbose = FALSE)
   
   message('|----- Done -----|')
@@ -142,17 +206,12 @@ merge_seurat <- function(
 ##  ............................................................................
 ##  Run function                                                            ####
 
-options(future.globals.maxSize = Inf)
-plan("multicore", workers = cores-1)
 object <- merge_seurat(
   objects_file = objects_file,
+  cores = cores,
   sample_column = sample_column
 )
-plan("sequential")
 
 ## ............................................................................
 ## Save output                                                             ####
-message(paste0('\n|----- Writing object -----|\n\noutdir: ', outdir, '/merged_snomics_object.qs'))
-qs::qsave(object, paste0(outdir, '/merged_snomics_object.qs'))
-
-message('\n|----- Done -----|\n')
+qs::qsave(object, paste0(outdir, '/snomics_object.qs'))
