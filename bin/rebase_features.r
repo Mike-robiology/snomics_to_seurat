@@ -106,7 +106,7 @@ rebase_features <- function(
 
 ##  ............................................................................
 ##  Run function                                                            ####
-obj_l <- rebase_features(objects_file, features_file, cores-1)
+obj_l <- rebase_features(objects_file, features_file, cores)
 
 ##  ............................................................................
 ##  Save objects                                                           ####

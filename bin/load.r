@@ -60,7 +60,6 @@ required$add_argument(
   required = TRUE
 )
 
-optional$add_argument("--expressed_gene_threshold")
 optional$add_argument("--min_rna_count_per_cell")
 optional$add_argument("--max_rna_count_per_cell")
 optional$add_argument("--min_atac_count_per_cell")
@@ -82,7 +81,6 @@ gex_source <- args$gex_source
 outdir <- args$outdir
 cores <- args$cores |> as.numeric()
 
-expressed_gene_threshold <- as.numeric(args$expressed_gene_threshold)
 min_rna_count_per_cell <- as.numeric(args$min_rna_count_per_cell)
 max_rna_count_per_cell <- as.numeric(args$max_rna_count_per_cell)
 min_atac_count_per_cell <- as.numeric(args$min_atac_count_per_cell)
@@ -94,24 +92,22 @@ min_cells_per_sample <- as.numeric(args$min_cells_per_sample)
 
 ####function####
 snomics_to_seurat <- function(
-    metadata_file,
-    snomics_dir,
-    sample_column,
-    gex_source,
-    expressed_gene_threshold,
-    min_rna_count_per_cell,
-    max_rna_count_per_cell,
-    min_atac_count_per_cell,
-    max_atac_count_per_cell,
-    max_mitochondrial_gene_pct,
-    max_nucleosome_signal,
-    min_tss_enrichment,
-    min_cells_per_sample,
-    cores
+  metadata_file,
+  snomics_dir,
+  sample_column,
+  gex_source,
+  min_rna_count_per_cell,
+  max_rna_count_per_cell,
+  min_atac_count_per_cell,
+  max_atac_count_per_cell,
+  max_mitochondrial_gene_pct,
+  max_nucleosome_signal,
+  min_tss_enrichment,
+  min_cells_per_sample,
+  cores
 ) {
 
   message('\n|----- QC parameters -----|\n')
-  message(paste0('expressed_gene_threshold: ', expressed_gene_threshold))
   message(paste0('min_rna_count_per_cell: ', min_rna_count_per_cell))
   message(paste0('max_rna_count_per_cell: ', max_rna_count_per_cell))
   message(paste0('min_atac_count_per_cell: ', min_atac_count_per_cell))
@@ -120,12 +116,12 @@ snomics_to_seurat <- function(
   message(paste0('max_nucleosome_signal: ', max_nucleosome_signal))
   message(paste0('min_tss_enrichment: ', min_tss_enrichment))
   message(paste0('min_cells_per_sample: ', min_cells_per_sample))
-  
+
   assertthat::assert_that(
     gex_source %in% c('cellranger_arc', 'raw', 'cellbender'),
     msg = 'gex_source must be one of cellranger_arc, cellbender, raw'
   )
-  
+
   message('\n|----- Loading data -----|\n')
   message(paste0('Using data from ', gex_source))
   metadata <- read.delim(metadata_file, sep = ',')
@@ -133,7 +129,7 @@ snomics_to_seurat <- function(
     sample_column %in% colnames(metadata), 
     msg = 'sample_column must be present in metadata_file'
   )
-  
+
   sample_metadata <- metadata %>%
     group_by(!!as.symbol(sample_column), library_type) %>%
     unite('fastqs', c(fastq_1, fastq_2), sep = ',') %>%
@@ -153,9 +149,6 @@ snomics_to_seurat <- function(
   samples <- samples[samples %in% sample_metadata[,sample_column]]
   sample_metadata <- sample_metadata[match(samples, sample_metadata[,sample_column]),]
   samples_regex <- paste0(samples, collapse = '|')
-
-  options(future.globals.maxSize = 200*1024^3)
-  plan("multicore", workers = cores)
   N <- length(samples)
 
   if ( gex_source == 'cellranger_arc' ) {
@@ -172,34 +165,31 @@ snomics_to_seurat <- function(
     gex_l <- Sys.glob(paste0(snomics_dir, '/cellbender/*/cellbender_feature_bc_matrix'))
     gex_l <- grep(samples_regex, gex_l, value = T) |> lapply(Read10X)
   }
-  
+
   acc_l <- lapply(counts_l, '[[', 2)
   acc_l <- lapply(1:length(acc_l), function(i) acc_l[[i]][, colnames(gex_l[[i]])])
-  
+
   bed_files <- Sys.glob(paste0(snomics_dir, '/cellranger_arc/*/*/*/atac_peaks.bed'))
   sample_metadata$bed_file <- grep(samples_regex, bed_files, value = T)
   frag_path <- Sys.glob(paste0(snomics_dir, '/cellranger_arc/*/*/*/atac_fragments.tsv.gz'))
   frag_path <- grep(samples_regex, frag_path, value = T)
 
 
-  
+
   message('\n|----- Getting annotation -----|\n')
   annotation <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
   seqlevels(annotation) <- paste0('chr', seqlevels(annotation))
   genome(annotation) <- 'hg38'
   seqlevelsStyle(annotation) <- 'UCSC'
   gene_table <- unique(annotation@elementMetadata[,c('gene_name', 'gene_id')])
-  
-  create_multi_seurat_object <- function(gex, acc, frag_path, sample_metadata, expressed_gene_threshold) {
+
+  create_multi_seurat_object <- function(gex, acc, frag_path, sample_metadatad) {
     cells_n <- ncol(gex)
     cell_metadata <- sample_metadata[rep(1, cells_n), ] |> as.data.frame()
     genes <- rownames(gex)
     genes <- c(gene_table$gene_name, genes)[match(genes, c(gene_table$gene_id, genes))]
     genes <- ave(genes, genes, FUN = function(i) ifelse(seq_along(i) == 1, i, paste0(i, '.', seq_along(i)-1))) # rename duplicate names
     rownames(gex) <- genes
-    expressed_genes <- rowSums(gex) >= expressed_gene_threshold
-    gex <- gex[expressed_genes, ]
-    message(paste0(round(mean(expressed_genes)*100, 3), '% genes expressed (', sum(expressed_genes), '/', length(expressed_genes), ')'))
     obj <- CreateSeuratObject(counts = gex, meta.data = cell_metadata)
     obj[['ATAC']] <- CreateChromatinAssay(
       counts = acc,
@@ -210,15 +200,14 @@ snomics_to_seurat <- function(
     obj <- RenameCells(obj, new.names = paste0(obj@meta.data[1, sample_column], colnames(obj)))
     return(obj)
   }
-  
+
   obj_l <- lapply(1:N, function(i) {
     message('\n|----- Creating object ', i, '/', N, ' -----|\n')
     create_multi_seurat_object(
       gex = gex_l[[i]],
       acc = acc_l[[i]],
       frag_path = frag_path[i],
-      sample_metadata = sample_metadata[i,],
-      expressed_gene_threshold = expressed_gene_threshold 
+      sample_metadata = sample_metadata[i,]
     )
   })
   
@@ -230,7 +219,8 @@ snomics_to_seurat <- function(
     obj$pct.mt <- colSums(mat[grep('^MT', rownames(mat)), ])/colSums(mat)*100
     return(obj)
   }
-  
+  options(future.globals.maxSize = Inf)
+  plan("multicore", workers = cores)
   obj_l <- lapply(1:N, function(i) {
     message('\n|----- Computing QC ', i, '/', N, ' (', samples[i], ') -----|\n')
     gc()
@@ -252,7 +242,7 @@ snomics_to_seurat <- function(
     message('\n',paste0(round(new_cells_n/orig_cells_n*100, 3), '% of cells pass QC (', new_cells_n, '/', orig_cells_n, ')'))
     return(obj)
   })
-
+  plan('sequential')
   gc()
   obj_l <- obj_l[!sapply(obj_l, is.null)]
   return(obj_l)
@@ -266,7 +256,6 @@ object_list <- snomics_to_seurat(
   snomics_dir,
   sample_column,
   gex_source,
-  expressed_gene_threshold,
   min_rna_count_per_cell,
   max_rna_count_per_cell,
   min_atac_count_per_cell,
@@ -275,7 +264,7 @@ object_list <- snomics_to_seurat(
   max_nucleosome_signal,
   min_tss_enrichment,
   min_cells_per_sample,
-  cores-1
+  cores
 )
 
 ##  ............................................................................

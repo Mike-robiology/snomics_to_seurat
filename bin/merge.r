@@ -58,9 +58,12 @@ cores <- args$cores |> as.numeric()
 ####function####
 merge_seurat <- function(
   objects_file,
-  sample_column
+  sample_column,
+  cores
 ) {
-  
+
+  options(future.globals.maxSize = Inf)
+
   # load
   objects_file <- strsplit(objects_file, ',')[[1]]
   obj_l <- lapply(objects_file, qs::qread)
@@ -70,12 +73,13 @@ merge_seurat <- function(
 
   message('\n|----- Running merging & integration (Reciprocal projection) -----|\n')
   # merge
+  gc()
   message('Merging objects')
   merged_obj <- merge(obj_l[[1]], y = obj_l[-1])
 
   # preprocess RNA
-  message('Preprocessing RNA')
   gc()
+  message('Preprocessing RNA')
   merged_obj <- merged_obj %>%
     NormalizeData(verbose = FALSE) %>%
     FindVariableFeatures(verbose = FALSE) %>%
@@ -85,18 +89,20 @@ merge_seurat <- function(
   # integrate RNA
   message('Integrating RNA (may take a while)')
   gc()
+  plan("multicore", workers = floor(cores * 0.5)) # Seurat seems to overuse cpus prior to running find anchors (need extra but not so many for parallelisation)
   integrated_obj <- IntegrateLayers(
-    merged_obj, 
+    merged_obj,
     method = RPCAIntegration,
     orig.reduction = 'pca',
     new.reduction = 'rpca',
-    verbose = TRUE,
+    verbose = FALSE,
     reference = 1
   ) %>% JoinLayers()
+  plan("sequential")
 
   # preprocess ATAC
-  message('Preprocessing ATAC')
   gc()
+  message('Preprocessing ATAC')
   DefaultAssay(integrated_obj) <- 'ATAC'
   integrated_obj <- integrated_obj %>%
     FindTopFeatures(min.cutoff = 10, verbose = FALSE) %>%
@@ -104,9 +110,10 @@ merge_seurat <- function(
     RunSVD(verbose = FALSE)
 
   # integrate ATAC
-  message('Integrating ATAC (may take a while)')
   gc()
+  message('Integrating ATAC (may take a while)')
   split_obj <- SplitObject(integrated_obj, sample_column)
+  plan("multicore", workers = floor(cores * 0.5)) # Seurat seems to overuse cpus prior to running find anchors
   atac.anchors <- FindIntegrationAnchors(
     object.list = split_obj,
     anchor.features = rownames(split_obj[[1]]),
@@ -122,37 +129,36 @@ merge_seurat <- function(
     dims.to.integrate = 1:30,
     verbose = FALSE
   )
+  plan("sequential")
   integrated_obj[['rlsi']] <- atac_integrated[['rlsi']]
   DefaultAssay(integrated_obj) <- 'RNA'
 
   # generate UMAP
-  message('Generating UMAPs')
   gc()
+  message('\n|----- Generating UMAPs -----|\n')
   integrated_obj <- integrated_obj %>%
     RunUMAP(reduction = "rpca", dims = 1:30, reduction.name = "umap.rna", reduction.key = "rnaUMAP_", verbose = FALSE) %>%
     RunUMAP(reduction = "rlsi", dims = 2:30, reduction.name = "umap.atac", reduction.key = "atacUMAP_", verbose = FALSE) %>%
     FindMultiModalNeighbors(reduction.list = list("rpca", "rlsi"), dims.list = list(1:30, 2:30), verbose = FALSE) %>%
     RunUMAP(nn.name = "weighted.nn", reduction.name = "umap.wnn", reduction.key = "wnnUMAP_", verbose = FALSE)
-  
-  message('|----- Done -----|')
+
   gc()
+  message('|----- Done -----|')
   return(integrated_obj)
 }
 
 ##  ............................................................................
 ##  Run function                                                            ####
-
-options(future.globals.maxSize = Inf)
-plan("multicore", workers = cores-1)
 object <- merge_seurat(
   objects_file = objects_file,
-  sample_column = sample_column
+  sample_column = sample_column,
+  cores = cores
 )
-plan("sequential")
 
 ## ............................................................................
 ## Save output                                                             ####
 message(paste0('\n|----- Writing object -----|\n\noutdir: ', outdir, '/merged_snomics_object.qs'))
+dir.create(outdir, recursive = TRUE)
 qs::qsave(object, paste0(outdir, '/merged_snomics_object.qs'))
 
 message('\n|----- Done -----|\n')

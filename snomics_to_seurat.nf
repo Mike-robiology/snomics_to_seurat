@@ -20,13 +20,6 @@ def create_chunks(LinkedHashMap row, String sample_column, int processing_size) 
   return ch_metadata
 }
 
-def params_to_args(map) {
-  def list = []
-  map.each { key, value -> list.add("--${key} ${value}") }
-
-  return(list.join(' '))
-}
-
 process CHUNK_METADATA {
   label 'local'
 
@@ -50,7 +43,6 @@ process LOAD {
   tuple val(project_id), path("${project_id}/snomics_objects.qs"), emit: outs
 
   script:
-  def qc_args = params.QC ? params_to_args(params.QC) : ''
   """
   load.r \\
     --metadata_file ${metadata_file} \\
@@ -59,7 +51,14 @@ process LOAD {
     --gex_source ${params.gex_source} \\
     --outdir ${project_id} \\
     --cores ${task.cpus} \\
-    $qc_args
+    --min_rna_count_per_cell ${params.QC.min_rna_count_per_cell} \\
+    --max_rna_count_per_cell ${params.QC.max_rna_count_per_cell} \\
+    --min_atac_count_per_cell ${params.QC.min_atac_count_per_cell} \\
+    --max_atac_count_per_cell ${params.QC.max_atac_count_per_cell} \\
+    --max_mitochondrial_gene_pct ${params.QC.max_mitochondrial_gene_pct} \\
+    --max_nucleosome_signal ${params.QC.max_nucleosome_signal} \\
+    --min_tss_enrichment ${params.QC.min_tss_enrichment} \\
+    --min_cells_per_sample ${params.QC.min_cells_per_sample}
   """
 
   stub:
@@ -83,7 +82,9 @@ process FIND_FEATURES {
   """
     find_features.r \\
     --objects_file ${snomics_objects} \\
-    --outdir ${project_id}
+    --outdir ${project_id} \\
+    --expressed_gene_count ${params.QC.expressed_gene_count} \\
+    --expressed_gene_sample_pct ${params.QC.expressed_gene_sample_pct} 
   """
 
 }

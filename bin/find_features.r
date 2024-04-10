@@ -32,16 +32,23 @@ required$add_argument(
   required = TRUE
 )
 
+optional$add_argument("--expressed_gene_count")
+optional$add_argument("--expressed_gene_sample_pct")
+
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Pre-process args                                                        ####
 args <- parser$parse_args()
 
 objects_file <- args$objects_file
 outdir <- args$outdir
+expressed_gene_count <- as.numeric(args$expressed_gene_count)
+expressed_gene_sample_pct <- as.numeric(args$expressed_gene_sample_pct)
 
 ####function####
 find_featuresets <- function(
-    objects_file
+  objects_file,
+  expressed_gene_count,
+  expressed_gene_sample_pct
 ) {
 
   # load
@@ -51,16 +58,29 @@ find_featuresets <- function(
   # unnest list
   obj_l <- unlist(obj_l, recursive = FALSE)
 
-  # count cells for auto memory allocation
+  # count cells for auto memory allocation (not implemented yet)
   n_cells <- sum(sapply(obj_l, ncol))
   message('Found ', n_cells, ' cells')
 
-  # common feature sets
+  # start common feature sets
   message('\n|----- Finding common RNA set -----|\n')
 
-  common_genes <- Reduce(intersect, lapply(obj_l, rownames))
-  all_genes <- Reduce(union, lapply(obj_l, rownames))
-  message(length(common_genes), ' genes expressed in common, of ', length(all_genes), ' genes availible (', round(length(common_genes)/length(all_genes)*100, 3), '%)')
+  # numer of unique genes with at least 1 count
+  n_genes_per_sample <- lapply(obj_l, function(x) {
+    rownames(x)[rowSums(x[["RNA"]]$counts) > 0]
+  })
+  n_genes <- length(Reduce(union, n_genes_per_sample))
+
+  # find genes which meet expression count and sample percentage
+  expressed_genes <- lapply(obj_l, function(x) {
+    rownames(x)[rowSums(x[["RNA"]]$counts) > expressed_gene_count]
+  }) |> unlist()
+  min_samples <- max(1, round(expressed_gene_sample_pct / 100 * length(obj_l)))
+  gene_occurance <- table(expressed_genes)
+  common_genes <- names(gene_occurance[gene_occurance >= min_samples])
+  n_genes_expressed <- length(common_genes)
+
+  message(n_genes_expressed, ' genes expressed, of ', n_genes, ' genes availible (', round(n_genes_expressed/n_genes*100, 3), '%)')
 
   message('\n|----- Finding common peak set -----|\n')
 
@@ -70,10 +90,10 @@ find_featuresets <- function(
   bed_paths <- sapply(metadata_l, '[', 1, "bed_file")
 
   peaks_l <- lapply(bed_paths, function(x) {
-      read.table(
-          file = x,
-          col.names = c("chr", "start", "end")
-      )
+    read.table(
+      file = x,
+      col.names = c("chr", "start", "end")
+    )
   })
 
   peaks_l <- lapply(peaks_l, makeGRangesFromDataFrame)
@@ -95,7 +115,11 @@ find_featuresets <- function(
 
 ##  ............................................................................
 ##  Run function                                                            ####
-out <- find_featuresets(objects_file)
+out <- find_featuresets(
+  objects_file,
+  expressed_gene_count,
+  expressed_gene_sample_pct
+)
 featuresets <- out[[1]]
 n_cells <- out[[2]]
 
