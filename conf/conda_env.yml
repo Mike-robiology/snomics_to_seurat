@@ -1,0 +1,20 @@
+name: snomics_to_seurat
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-tidyverse
+  - r-signac
+  - r-seurat
+  - r-seuratobject
+  - r-qs
+  - r-assertthat
+  - r-future
+  - r-argparse
+  - r-matrix=1.6_1
+  - r-irlba
+  - bioconductor-ensdb.hsapiens.v86
+  - bioconductor-bsgenome.hsapiens.ucsc.hg38
+  - bioconductor-genomicranges
+  - bioconductor-biovizbase
