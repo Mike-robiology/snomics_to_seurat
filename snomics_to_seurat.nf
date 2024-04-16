@@ -41,6 +41,7 @@ process LOAD {
 
   output:
   tuple val(project_id), path("${project_id}/snomics_objects.qs"), emit: outs
+  path "${project_id}/failed_samples.txt", emit: failed_samples, optional: true
 
   script:
   """
@@ -65,6 +66,7 @@ process LOAD {
   """
   mkdir ${project_id}
   touch ${project_id}/snomics_objects.qs
+  touch ${project_id}/failed_samples.txt
   """
 
 }
@@ -75,7 +77,6 @@ process FIND_FEATURES {
 
   output:
   path "${project_id}/common_features.qs" , emit: outs
-  path "${project_id}/n_cells", emit: n_cells
 
   script:
   snomics_objects = snomics_objects.join(',')
@@ -107,6 +108,8 @@ process REBASE_FEATURES {
 }
 
 process MERGE {
+  queue { task.memory > 920.GB ? 'v1_largemem72' : 'v1_short8' }
+
   input:
   tuple val(project_id), path(snomics_objects, stageAs: '??/*')
 
@@ -124,6 +127,21 @@ process MERGE {
   """
 }
 
+process SAVE_FAILED {
+  label 'local'
+
+  input:
+  path failed_samples, stageAs: '??/*'
+
+  output:
+  path 'failed_samples.txt'
+
+  script:
+  """
+  cat **/*.txt > failed_samples.txt
+  """
+}
+
 process SAVE_PARAMS {
   label 'local'
 
@@ -135,7 +153,6 @@ process SAVE_PARAMS {
   echo "${params}" > run_parameters.json
   """
 }
-
 
 workflow {
 
@@ -149,11 +166,16 @@ workflow {
   ch_inputs = CHUNK_METADATA( ch_chunks )
 
   // load data into seurat
-  ch_individual = LOAD(
+  load_outs = LOAD(
       ch_inputs
-  ).outs
+  )
+  ch_individual = load_outs.outs
+  ch_failed = load_outs.failed_samples.collect()
 
-  // TODO: define function instead of repeating code
+  // save failed samples
+  SAVE_FAILED( ch_failed )
+
+  // TODO: define function instead of repeating merge channels code
   // merge samples from the same project
   ch_merged = ch_individual
     .groupTuple()
@@ -161,16 +183,15 @@ workflow {
   // merge projects if desired
   if (params.join_projects) {
     ch_merged = ch_merged
-      .map{ id, files -> files }
-      .flatten()
+      .flatMap{ id, files -> files}
+      .collect()
       .map{ files -> ['all', files]}
   }
-
+  
   // find common feature set
   features_out = FIND_FEATURES(
       ch_merged
   )
-  n_cells = features_out.n_cells
   ch_features = features_out.outs
 
   // add common features to channel
@@ -189,8 +210,8 @@ workflow {
   // merge rebased projects if desired
   if (params.join_projects) {
     ch_rebased_merged = ch_rebased_merged
-      .map{ id, files -> files }
-      .flatten()
+      .flatMap{ id, files -> files}
+      .collect()
       .map{ files -> ['all', files]}
   }
   
@@ -199,6 +220,6 @@ workflow {
       ch_rebased_merged
   ) : ch_rebased_merged
 
+  // save parameters
   SAVE_PARAMS()
-  
 }

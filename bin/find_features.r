@@ -104,30 +104,24 @@ find_featuresets <- function(
 
   return(
     list(
-      list(
-        common_genes = common_genes,
-        combined_peaks = combined_peaks
-      ),
-      n_cells
+      common_genes = common_genes,
+      combined_peaks = combined_peaks
     )
   )
 }
 
 ##  ............................................................................
 ##  Run function                                                            ####
-out <- find_featuresets(
+featuresets <- find_featuresets(
   objects_file,
   expressed_gene_count,
   expressed_gene_sample_pct
 )
-featuresets <- out[[1]]
-n_cells <- out[[2]]
 
 ##  ............................................................................
 ##  Save output                                                             ####
 message(paste0('\n|----- Writing object -----|\n\noutdir: ', outdir, '/common_features.qs'))
 dir.create(outdir, recursive = TRUE)
 qs::qsave(featuresets, paste0(outdir, '/common_features.qs'))
-write.table(n_cells, file = paste0(outdir, '/n_cells'), row.names = FALSE, col.names = FALSE)
 
 message('\n|----- Done -----|\n')

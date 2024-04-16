@@ -84,7 +84,7 @@ merge_seurat <- function(
     NormalizeData(verbose = FALSE) %>%
     FindVariableFeatures(verbose = FALSE) %>%
     ScaleData(verbose = FALSE) %>%
-    RunPCA(verbose = FALSE)
+    RunPCA(verbose = FALSE, npcs = 50)
 
   # integrate RNA
   message('Integrating RNA (may take a while)')
@@ -96,7 +96,10 @@ merge_seurat <- function(
     orig.reduction = 'pca',
     new.reduction = 'rpca',
     verbose = FALSE,
-    reference = 1
+    reference = 1,
+    dims = 1:30,
+    dims.to.integrate = 1:30,
+    k.weight = 50
   ) %>% JoinLayers()
   plan("sequential")
 
@@ -107,8 +110,7 @@ merge_seurat <- function(
   integrated_obj <- integrated_obj %>%
     FindTopFeatures(min.cutoff = 10, verbose = FALSE) %>%
     RunTFIDF(verbose = FALSE) %>%
-    RunSVD(verbose = FALSE)
-
+    RunSVD(verbose = FALSE, n = 50)
   # integrate ATAC
   gc()
   message('Integrating ATAC (may take a while)')
@@ -127,7 +129,8 @@ merge_seurat <- function(
     reductions = integrated_obj[["lsi"]],
     new.reduction.name = "rlsi",
     dims.to.integrate = 1:30,
-    verbose = FALSE
+    verbose = FALSE,
+    k.weight = 50
   )
   plan("sequential")
   integrated_obj[['rlsi']] <- atac_integrated[['rlsi']]

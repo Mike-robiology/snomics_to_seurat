@@ -174,6 +174,11 @@ snomics_to_seurat <- function(
   frag_path <- Sys.glob(paste0(snomics_dir, '/cellranger_arc/*/*/*/atac_fragments.tsv.gz'))
   frag_path <- grep(samples_regex, frag_path, value = T)
 
+  message('\n|----- Recieved ATAC files -----|\n')
+  message(paste0('bed: '))
+  message(bed_files)
+  message(paste0('frag: '))
+  message(frag_path)
 
 
   message('\n|----- Getting annotation -----|\n')
@@ -183,7 +188,7 @@ snomics_to_seurat <- function(
   seqlevelsStyle(annotation) <- 'UCSC'
   gene_table <- unique(annotation@elementMetadata[,c('gene_name', 'gene_id')])
 
-  create_multi_seurat_object <- function(gex, acc, frag_path, sample_metadatad) {
+  create_multi_seurat_object <- function(gex, acc, frag_path, sample_metadata) {
     cells_n <- ncol(gex)
     cell_metadata <- sample_metadata[rep(1, cells_n), ] |> as.data.frame()
     genes <- rownames(gex)
@@ -191,12 +196,18 @@ snomics_to_seurat <- function(
     genes <- ave(genes, genes, FUN = function(i) ifelse(seq_along(i) == 1, i, paste0(i, '.', seq_along(i)-1))) # rename duplicate names
     rownames(gex) <- genes
     obj <- CreateSeuratObject(counts = gex, meta.data = cell_metadata)
-    obj[['ATAC']] <- CreateChromatinAssay(
+    ChAssay <- CreateChromatinAssay(
       counts = acc,
       sep = c(":", "-"),
       fragments = frag_path,
       annotation = annotation
-    )
+    ) |> try(silent = TRUE) # detect fragment barcode errors
+    if (inherits(ChAssay, "try-error")) {
+      sample <- sample_metadata[1, sample_column]
+      message("Error creating chromatin assay, removing sample (", sample, ")", " - Error is:\n", ChAssay)
+      return(paste0(sample, " - Reason: Failed to create object [", ChAssay, "]"))
+    }
+    obj[['ATAC']] <- ChAssay
     obj <- RenameCells(obj, new.names = paste0(obj@meta.data[1, sample_column], colnames(obj)))
     return(obj)
   }
@@ -210,7 +221,7 @@ snomics_to_seurat <- function(
       sample_metadata = sample_metadata[i,]
     )
   })
-  
+
   compute_QC <- function(obj) {
     obj <- obj %>%
       TSSEnrichment(assay = 'ATAC') %>%
@@ -222,7 +233,9 @@ snomics_to_seurat <- function(
   options(future.globals.maxSize = Inf)
   plan("multicore", workers = cores)
   obj_l <- lapply(1:N, function(i) {
-    message('\n|----- Computing QC ', i, '/', N, ' (', samples[i], ') -----|\n')
+    if (is.character(obj_l[[i]])) return(obj_l[[i]])
+    sample <- samples[i]
+    message('\n|----- Computing QC ', i, '/', N, ' (', sample, ') -----|\n')
     gc()
     obj <- compute_QC(obj_l[[i]])
     orig_cells_n <- ncol(obj)
@@ -234,8 +247,8 @@ snomics_to_seurat <- function(
             obj$nucleosome_signal <= max_nucleosome_signal &
             obj$TSS.enrichment >= min_tss_enrichment
     if (sum(pass) < min_cells_per_sample) {
-      message('Sample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
-      return(NULL)
+      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
+      return(paste0(sample, " - Reason: Failed QC"))
     }
     obj <- obj[, pass]
     new_cells_n <- ncol(obj)
@@ -244,14 +257,21 @@ snomics_to_seurat <- function(
   })
   plan('sequential')
   gc()
-  obj_l <- obj_l[!sapply(obj_l, is.null)]
-  return(obj_l)
+  failed_samples <- unlist(obj_l[sapply(obj_l, is.character)])
+  obj_l <- obj_l[sapply(obj_l, Negate(is.character))]
+
+  return(
+    list(
+      object_list = obj_l,
+      failed_samples = failed_samples
+    )
+  )
 }
 
 ##  ............................................................................
 ##  Run function                                                            ####
 
-object_list <- snomics_to_seurat(
+out <- snomics_to_seurat(
   metadata_file,
   snomics_dir,
   sample_column,
@@ -267,10 +287,19 @@ object_list <- snomics_to_seurat(
   cores
 )
 
+object_list <- out$object_list
+failed_samples <- out$failed_samples
+
 ##  ............................................................................
 ##  Save objects                                                           ####
-message(paste0('\n|----- Writing object -----|\n\noutdir: ', outdir, '/snomics_objects.qs'))
+message(paste0("\n|----- Writing object -----|\n\noutdir: ", outdir, "/snomics_objects.qs"))
 dir.create(outdir, recursive = TRUE)
-qs::qsave(object_list, paste0(outdir, '/snomics_objects.qs'))
+qs::qsave(object_list, paste0(outdir, "/snomics_objects.qs"))
+if (length(failed_samples) > 0) {
+  write(
+    failed_samples,
+    paste0(outdir, "/failed_samples.txt")
+  )
+}
 
 message('\n|----- Done -----|\n')
