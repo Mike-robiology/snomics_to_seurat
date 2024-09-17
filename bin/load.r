@@ -14,6 +14,8 @@ suppressMessages(library(qs))
 suppressMessages(library(BSgenome.Hsapiens.UCSC.hg38))
 suppressMessages(library(assertthat))
 suppressMessages(library(future))
+suppressMessages(library(scDblFinder))
+suppressMessages(library(aggregation))
 
 ##  ............................................................................
 ##  Parse command-line arguments                                            ####
@@ -228,8 +230,31 @@ snomics_to_seurat <- function(
       NucleosomeSignal(assay = 'ATAC')
     mat <- obj[['RNA']]$counts
     obj$pct.mt <- colSums(mat[grep('^MT', rownames(mat)), ])/colSums(mat)*100
+    obj<-AMULET_scDblFinder(obj)
     return(obj)
   }
+  
+  AMULET_scDblFinder<-function(obj){
+    
+    sce<-as.SingleCellExperiment(obj)
+    sce <- scDblFinder(sce, aggregateFeatures=TRUE, processing="normFeatures")
+    res <- amulet(obj@assays$ATAC@fragments[[1]]@path,fullInMemory=TRUE)
+    rownames(res)<-paste(unique(sce@colData$sample),rownames(res),sep="")
+    res <- res[rownames(sce@colData),  ]
+    res$scDblFinder.p <- 1-colData(sce)[row.names(res), "scDblFinder.score"]
+    res$AMULET_scDblFinder.combined.p <- apply(res[,c("scDblFinder.p", "p.value")], 1, FUN=function(x){
+      x[x<0.001] <- 0.001
+      suppressWarnings(aggregation::fisher(x))
+    })
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["AMULET_scDblFinder.combined.p"]],
+      col.name = "AMULET_scDblFinder.combined.p"
+    )
+    return(obj)
+    
+  }
+  
   options(future.globals.maxSize = Inf)
   plan("multicore", workers = cores)
   obj_l <- lapply(1:N, function(i) {
