@@ -27,6 +27,12 @@ required$add_argument(
 )
 
 required$add_argument(
+  "--macs2_path",
+  help = "path to macs2",
+  required = TRUE
+)
+
+required$add_argument(
   "--outdir",
   help = "path where objects will be saved",
   required = TRUE
@@ -34,6 +40,8 @@ required$add_argument(
 
 optional$add_argument("--expressed_gene_count")
 optional$add_argument("--expressed_gene_sample_pct")
+optional$add_argument("--remove_mt_genes")
+optional$add_argument("--remove_mt_peaks")
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Pre-process args                                                        ####
@@ -41,14 +49,20 @@ args <- parser$parse_args()
 
 objects_file <- args$objects_file
 outdir <- args$outdir
+macs2_path <- args$macs2_path
 expressed_gene_count <- as.numeric(args$expressed_gene_count)
 expressed_gene_sample_pct <- as.numeric(args$expressed_gene_sample_pct)
+remove_mt_genes <- as.logical(args$remove_mt_genes)
+remove_mt_peaks <- as.logical(args$remove_mt_peaks)
 
 ####function####
 find_featuresets <- function(
   objects_file,
+  macs2_path,
   expressed_gene_count,
-  expressed_gene_sample_pct
+  expressed_gene_sample_pct,
+  remove_mt_genes,
+  remove_mt_peaks
 ) {
 
   # load
@@ -82,25 +96,21 @@ find_featuresets <- function(
 
   message(n_genes_expressed, ' genes expressed, of ', n_genes, ' genes availible (', round(n_genes_expressed/n_genes*100, 3), '%)')
 
-  message('\n|----- Finding common peak set -----|\n')
+  message('\n|----- Finding consensus peak set -----|\n')
 
-  peak_limits <- c(20, 10000)
+  frag_objs <- lapply(obj_l, function(x) x[['ATAC']]@fragments[[1]])
+  frag_paths <- lapply(frag_objs, GetFragmentData, slot = "path")
+  combined_peaks <- CallPeaks(frag_paths, macs2.path = macs2_path, outdir = "consensus_peaks", cleanup = FALSE)
 
-  metadata_l <- lapply(obj_l, function(x) x@meta.data)
-  bed_paths <- sapply(metadata_l, '[', 1, "bed_file")
 
-  peaks_l <- lapply(bed_paths, function(x) {
-    read.table(
-      file = x,
-      col.names = c("chr", "start", "end")
-    )
-  })
-
-  peaks_l <- lapply(peaks_l, makeGRangesFromDataFrame)
-  peaks_l <- do.call('c', peaks_l)
-  combined_peaks <- Signac::reduce(x = peaks_l)
-  peak_widths <- width(combined_peaks)
-  combined_peaks <- combined_peaks[peak_widths > peak_limits[1] & peak_widths < peak_limits[2]]
+  if (remove_mt_genes) {
+    message('\n|----- Removing mitochondrial genes -----|\n')
+    common_genes <- common_genes[!grepl('^MT', common_genes)]
+  }
+  if (remove_mt_peaks) {
+    message('\n|----- Removing mitochondrial peaks -----|\n')
+    combined_peaks <- combined_peaks[combined_peaks@seqnames != "chrM",]
+  }
 
   return(
     list(
@@ -114,8 +124,11 @@ find_featuresets <- function(
 ##  Run function                                                            ####
 featuresets <- find_featuresets(
   objects_file,
+  macs2_path,
   expressed_gene_count,
-  expressed_gene_sample_pct
+  expressed_gene_sample_pct,
+  remove_mt_genes,
+  remove_mt_peaks
 )
 
 ##  ............................................................................
@@ -124,4 +137,4 @@ message(paste0('\n|----- Writing object -----|\n\noutdir: ', outdir, '/common_fe
 dir.create(outdir, recursive = TRUE)
 qs::qsave(featuresets, paste0(outdir, '/common_features.qs'))
 
-message('\n|----- Done -----|\n')
+message("\n|----- Done -----|\n")
