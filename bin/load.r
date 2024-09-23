@@ -242,15 +242,29 @@ snomics_to_seurat <- function(
     rownames(res)<-paste(unique(sce@colData$sample),rownames(res),sep="")
     res <- res[rownames(sce@colData),  ]
     res$scDblFinder.p <- 1-colData(sce)[row.names(res), "scDblFinder.score"]
-    res$AMULET_scDblFinder.combined.p <- apply(res[,c("scDblFinder.p", "p.value")], 1, FUN=function(x){
-      x[x<0.001] <- 0.001
-      suppressWarnings(aggregation::fisher(x))
-    })
+    
     obj <- AddMetaData(
       object = obj,
-      metadata = res[["AMULET_scDblFinder.combined.p"]],
-      col.name = "AMULET_scDblFinder.combined.p"
+      metadata = res[["scDblFinder.p"]],
+      col.name = "scDblFinder.p"
     )
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["p.value"]],
+      col.name = "AMULET.p"
+    )
+    
+    res <- res %>%
+      mutate(Doublet = case_when(
+        ((p.value <= 0.05) & (scDblFinder.p <= 0.05)) ~ "Yes",
+        ((p.value >= 0.05) | (scDblFinder.p >= 0.05)) ~ "No"))
+    
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["Doublet"]],
+      col.name = "Doublet"
+    )
+    
     return(obj)
     
   }
