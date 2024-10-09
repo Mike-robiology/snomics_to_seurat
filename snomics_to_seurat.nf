@@ -60,6 +60,7 @@ process LOAD {
     --max_nucleosome_signal ${params.QC.max_nucleosome_signal} \\
     --min_tss_enrichment ${params.QC.min_tss_enrichment} \\
     --min_cells_per_sample ${params.QC.min_cells_per_sample}
+    --doublet_pvalue ${params.QC.doublet_pvalue}
   """
 
   stub:
