@@ -14,6 +14,7 @@ suppressMessages(library(qs))
 suppressMessages(library(BSgenome.Hsapiens.UCSC.hg38))
 suppressMessages(library(assertthat))
 suppressMessages(library(future))
+suppressMessages(library(scDblFinder))
 
 ##  ............................................................................
 ##  Parse command-line arguments                                            ####
@@ -68,6 +69,7 @@ optional$add_argument("--max_mitochondrial_gene_pct")
 optional$add_argument("--max_nucleosome_signal")
 optional$add_argument("--min_tss_enrichment")
 optional$add_argument("--min_cells_per_sample")
+optional$add_argument("--doublet_pvalue")
 
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
@@ -89,6 +91,7 @@ max_mitochondrial_gene_pct <- as.numeric(args$max_mitochondrial_gene_pct)
 max_nucleosome_signal <- as.numeric(args$max_nucleosome_signal)
 min_tss_enrichment <- as.numeric(args$min_tss_enrichment)
 min_cells_per_sample <- as.numeric(args$min_cells_per_sample)
+doublet_pvalue <- as.numeric(args$doublet_pvalue)
 
 ####function####
 snomics_to_seurat <- function(
@@ -104,6 +107,7 @@ snomics_to_seurat <- function(
   max_nucleosome_signal,
   min_tss_enrichment,
   min_cells_per_sample,
+  doublet_pvalue,
   cores
 ) {
 
@@ -116,6 +120,7 @@ snomics_to_seurat <- function(
   message(paste0('max_nucleosome_signal: ', max_nucleosome_signal))
   message(paste0('min_tss_enrichment: ', min_tss_enrichment))
   message(paste0('min_cells_per_sample: ', min_cells_per_sample))
+  message(paste0('doublet_pvalue: ', doublet_pvalue))
 
   assertthat::assert_that(
     gex_source %in% c('cellranger_arc', 'raw', 'cellbender'),
@@ -228,8 +233,45 @@ snomics_to_seurat <- function(
       NucleosomeSignal(assay = 'ATAC')
     mat <- obj[['RNA']]$counts
     obj$pct.mt <- colSums(mat[grep('^MT', rownames(mat)), ])/colSums(mat)*100
+    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
     return(obj)
   }
+  
+  AMULET_scDblFinder <- function(obj, doublet_pvalue) {
+    
+    sce <- as.SingleCellExperiment(obj)
+    sce <- scDblFinder(sce, aggregateFeatures=TRUE, processing="normFeatures")
+    res <- amulet(obj@assays$ATAC@fragments[[1]]@path,fullInMemory=TRUE)
+    rownames(res)<-paste(unique(sce@colData$sample),rownames(res),sep="")
+    res <- res[rownames(sce@colData),  ]
+    res$scDblFinder.p <- 1-colData(sce)[row.names(res), "scDblFinder.score"]
+    
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["scDblFinder.p"]],
+      col.name = "scDblFinder.p"
+    )
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["p.value"]],
+      col.name = "AMULET.p"
+    )
+    
+    res <- res %>%
+      mutate(Doublet = case_when(
+        ((p.value <= doublet_pvalue) & (scDblFinder.p <= doublet_pvalue)) ~ "Yes",
+        ((p.value >= doublet_pvalue) | (scDblFinder.p >= doublet_pvalue)) ~ "No"))
+    
+    obj <- AddMetaData(
+      object = obj,
+      metadata = res[["Doublet"]],
+      col.name = "Doublet"
+    )
+    
+    return(obj)
+    
+  }
+  
   options(future.globals.maxSize = Inf)
   plan("multicore", workers = cores)
   obj_l <- lapply(1:N, function(i) {
@@ -245,7 +287,8 @@ snomics_to_seurat <- function(
             obj$nCount_ATAC <= max_atac_count_per_cell &
             obj$pct.mt <= max_mitochondrial_gene_pct &
             obj$nucleosome_signal <= max_nucleosome_signal &
-            obj$TSS.enrichment >= min_tss_enrichment
+            obj$TSS.enrichment >= min_tss_enrichment &
+            obj$Doublet == "No"
     if (sum(pass) < min_cells_per_sample) {
       message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
       return(paste0(sample, " - Reason: Failed QC"))
@@ -284,6 +327,7 @@ out <- snomics_to_seurat(
   max_nucleosome_signal,
   min_tss_enrichment,
   min_cells_per_sample,
+  doublet_pvalue,
   cores
 )
 
