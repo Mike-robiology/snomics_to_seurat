@@ -18,3 +18,4 @@ dependencies:
   - bioconductor-bsgenome.hsapiens.ucsc.hg38
   - bioconductor-genomicranges
   - bioconductor-biovizbase
+  - bioconductor-scdblfinder
