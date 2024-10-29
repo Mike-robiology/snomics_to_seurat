@@ -59,6 +59,8 @@ process LOAD {
     --max_mitochondrial_gene_pct ${params.QC.max_mitochondrial_gene_pct} \\
     --max_nucleosome_signal ${params.QC.max_nucleosome_signal} \\
     --min_tss_enrichment ${params.QC.min_tss_enrichment} \\
+    --min_cells_per_sample ${params.QC.min_cells_per_sample} \\
+    --max_blacklist_ratio ${params.QC.max_blacklist_ratio}
     --min_cells_per_sample ${params.QC.min_cells_per_sample}
     --doublet_pvalue ${params.QC.doublet_pvalue}
   """
@@ -82,11 +84,15 @@ process FIND_FEATURES {
   script:
   snomics_objects = snomics_objects.join(',')
   """
+    mkdir consensus_peaks
     find_features.r \\
     --objects_file ${snomics_objects} \\
     --outdir ${project_id} \\
+    --macs2_path ${params.macs2_path} \\
     --expressed_gene_count ${params.QC.expressed_gene_count} \\
-    --expressed_gene_sample_pct ${params.QC.expressed_gene_sample_pct} 
+    --expressed_gene_sample_pct ${params.QC.expressed_gene_sample_pct} \\
+    --remove_mt_genes ${params.QC.remove_mt_genes} \\
+    --remove_mt_peaks ${params.QC.remove_mt_peaks}
   """
 
 }

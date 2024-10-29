@@ -89,7 +89,7 @@ merge_seurat <- function(
   # integrate RNA
   message('Integrating RNA (may take a while)')
   gc()
-  plan("multicore", workers = floor(cores * 0.5)) # Seurat seems to overuse cpus prior to running find anchors (need extra but not so many for parallelisation)
+  plan("multicore", workers = floor(cores * 0.25)) # Seurat seems to overuse cpus prior to running find anchors (need extra but not so many for parallelisation)
   integrated_obj <- IntegrateLayers(
     merged_obj,
     method = RPCAIntegration,
@@ -115,7 +115,7 @@ merge_seurat <- function(
   gc()
   message('Integrating ATAC (may take a while)')
   split_obj <- SplitObject(integrated_obj, sample_column)
-  plan("multicore", workers = floor(cores * 0.5)) # Seurat seems to overuse cpus prior to running find anchors
+  plan("multicore", workers = floor(cores * 0.25)) # Seurat seems to overuse cpus prior to running find anchors
   atac.anchors <- FindIntegrationAnchors(
     object.list = split_obj,
     anchor.features = rownames(split_obj[[1]]),

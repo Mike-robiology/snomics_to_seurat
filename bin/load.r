@@ -69,6 +69,7 @@ optional$add_argument("--max_mitochondrial_gene_pct")
 optional$add_argument("--max_nucleosome_signal")
 optional$add_argument("--min_tss_enrichment")
 optional$add_argument("--min_cells_per_sample")
+optional$add_argument("--max_blacklist_ratio")
 optional$add_argument("--doublet_pvalue")
 
 
@@ -91,6 +92,7 @@ max_mitochondrial_gene_pct <- as.numeric(args$max_mitochondrial_gene_pct)
 max_nucleosome_signal <- as.numeric(args$max_nucleosome_signal)
 min_tss_enrichment <- as.numeric(args$min_tss_enrichment)
 min_cells_per_sample <- as.numeric(args$min_cells_per_sample)
+max_blacklist_ratio <- as.numeric(args$max_blacklist_ratio)
 doublet_pvalue <- as.numeric(args$doublet_pvalue)
 
 ####function####
@@ -107,6 +109,7 @@ snomics_to_seurat <- function(
   max_nucleosome_signal,
   min_tss_enrichment,
   min_cells_per_sample,
+  max_blacklist_ratio,
   doublet_pvalue,
   cores
 ) {
@@ -120,6 +123,7 @@ snomics_to_seurat <- function(
   message(paste0('max_nucleosome_signal: ', max_nucleosome_signal))
   message(paste0('min_tss_enrichment: ', min_tss_enrichment))
   message(paste0('min_cells_per_sample: ', min_cells_per_sample))
+  message(paste0('max_blacklist_ratio: ', max_blacklist_ratio))
   message(paste0('doublet_pvalue: ', doublet_pvalue))
 
   assertthat::assert_that(
@@ -231,6 +235,11 @@ snomics_to_seurat <- function(
     obj <- obj %>%
       TSSEnrichment(assay = 'ATAC') %>%
       NucleosomeSignal(assay = 'ATAC')
+    obj$blacklist_ratio <- FractionCountsInRegion(
+      object = obj,
+      assay = 'ATAC',
+      regions = blacklist_hg38_unified
+    )
     mat <- obj[['RNA']]$counts
     obj$pct.mt <- colSums(mat[grep('^MT', rownames(mat)), ])/colSums(mat)*100
     obj <- AMULET_scDblFinder(obj, doublet_pvalue)
@@ -288,6 +297,7 @@ snomics_to_seurat <- function(
             obj$pct.mt <= max_mitochondrial_gene_pct &
             obj$nucleosome_signal <= max_nucleosome_signal &
             obj$TSS.enrichment >= min_tss_enrichment &
+            obj$blacklist_ratio <= max_blacklist_ratio &
             obj$Doublet == "No"
     if (sum(pass) < min_cells_per_sample) {
       message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
@@ -327,6 +337,7 @@ out <- snomics_to_seurat(
   max_nucleosome_signal,
   min_tss_enrichment,
   min_cells_per_sample,
+  max_blacklist_ratio,
   doublet_pvalue,
   cores
 )
