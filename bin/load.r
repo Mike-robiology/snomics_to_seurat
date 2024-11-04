@@ -1,5 +1,15 @@
 #!/usr/bin/env Rscript
 
+## TODO
+# perform on only cells passing QC (excluding atac doublet filtering)
+# add var featires + normalize + scale + pca + tsne calculation for object
+# estimate doublet rate from doublets per 1000
+# Doublet finder paramSweep
+# Doublet finder find.pK
+# Doublet finder modleHomotypic
+# Doublet finder doubletFinder x2
+
+
 ##  ............................................................................
 ##  Load packages                                                           ####
 suppressMessages(library(argparse))
@@ -15,6 +25,7 @@ suppressMessages(library(BSgenome.Hsapiens.UCSC.hg38))
 suppressMessages(library(assertthat))
 suppressMessages(library(future))
 suppressMessages(library(scDblFinder))
+suppressMessages(library(DoubletFinder))
 
 ##  ............................................................................
 ##  Parse command-line arguments                                            ####
@@ -70,7 +81,8 @@ optional$add_argument("--max_nucleosome_signal")
 optional$add_argument("--min_tss_enrichment")
 optional$add_argument("--min_cells_per_sample")
 optional$add_argument("--max_blacklist_ratio")
-optional$add_argument("--doublet_pvalue")
+optional$add_argument("--atac_doublet_pvalue")
+optionsl$add_argument("--rna_doublet_rate")
 
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
@@ -93,7 +105,8 @@ max_nucleosome_signal <- as.numeric(args$max_nucleosome_signal)
 min_tss_enrichment <- as.numeric(args$min_tss_enrichment)
 min_cells_per_sample <- as.numeric(args$min_cells_per_sample)
 max_blacklist_ratio <- as.numeric(args$max_blacklist_ratio)
-doublet_pvalue <- as.numeric(args$doublet_pvalue)
+doublet_pvalue <- as.numeric(args$atac_doublet_pvalue)
+doublets_per_thousand <- as.numeric(args$rna_doublets_per_thousand)
 
 ####function####
 snomics_to_seurat <- function(
@@ -111,6 +124,7 @@ snomics_to_seurat <- function(
   min_cells_per_sample,
   max_blacklist_ratio,
   doublet_pvalue,
+  doublets_per_thousand,
   cores
 ) {
 
@@ -125,6 +139,7 @@ snomics_to_seurat <- function(
   message(paste0('min_cells_per_sample: ', min_cells_per_sample))
   message(paste0('max_blacklist_ratio: ', max_blacklist_ratio))
   message(paste0('doublet_pvalue: ', doublet_pvalue))
+  message(paste0('doublets_per_thousand: ', doublets_per_thousand))
 
   assertthat::assert_that(
     gex_source %in% c('cellranger_arc', 'raw', 'cellbender'),
@@ -242,7 +257,6 @@ snomics_to_seurat <- function(
     )
     mat <- obj[['RNA']]$counts
     obj$pct.mt <- colSums(mat[grep('^MT', rownames(mat)), ])/colSums(mat)*100
-    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
     return(obj)
   }
   
@@ -274,11 +288,98 @@ snomics_to_seurat <- function(
     obj <- AddMetaData(
       object = obj,
       metadata = res[["Doublet"]],
-      col.name = "Doublet"
+      col.name = "AMULETDoublet"
     )
     
     return(obj)
+  }
+  
+  # required processing for doublet finder
+  process_seurat <- function(obj) {
+    obj <- NormalizeData(obj, verbose = F) %>%
+      FindVariableFeatures(selection.method = "vst", nfeatures = 2000, verbose = F) %>%
+      ScaleData(verbose = F) %>%
+      RunPCA(features = VariableFeatures(object = obj), verbose = F) %>%
+      FindNeighbors(dims = 1:10, verbose = F) %>%
+      FindClusters(resolution = 0.1, verbose = F) %>%
+      RunTSNE(dims = 1:10, verbose = F)
+    return(obj)
+  }
+  
+  run_doublet_finder <- function(obj, doublets_per_thousand) {
+    obj <- process_seurat(obj)
+    n_cells <- ncol(obj)
     
+    # convert dpk to doublet rate
+    doublet_rate <- (n_cells / 1000 * doublets_per_thousand) / 1000
+
+    # parameter sweep
+    sweep_res <- DoubletFinder::paramSweep(
+      obj,
+      num.cores = cores,
+      PCs = 1:10,
+      sct = FALSE
+    )
+    sweep_stats <- DoubletFinder::summarizeSweep(sweep_res, GT = FALSE)
+    bcmvn <- DoubletFinder::find.pK(sweep_stats)
+    bcmvn$pK <- as.numeric(as.character(bcmvn$pK))
+    pK <- bcmvn[bcmvn$BCmetric == max(bcmvn$BCmetric), ]$pK
+
+    # modelling
+    annotations <- obj@meta.data$seurat_clusters
+    homotypic.prop <- modelHomotypic(annotations)
+    nExp_poi <- round(doublet_rate * n_cells)
+    nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+
+    # doublet finder
+    obj <- doubletFinder(
+      obj,
+      PCs = 1:10,
+      pN = 0.25,
+      pK = pK,
+      nExp = nExp_poi,
+      reuse.pANN = FALSE,
+      sct = FALSE
+    )
+    pann_hi <- sprintf("pANN_0.25_%s_%s", pK, nExp_poi)
+    obj <- doubletFinder(
+      obj,
+      PCs = 1:10,
+      pN = 0.25,
+      pK = pK,
+      nExp = nExp_poi.adj,
+      reuse.pANN = FALSE,
+      sct = FALSE
+    )
+
+    # annotate
+    obj@meta.data[, "DF_hi.lo"] <- obj@meta.data[, sprintf(
+      "DF.classifications_0.25_%s_%s",
+      pK,
+      nExp_poi
+    )]
+    
+    obj@meta.data$DF_hi.lo[which(
+      obj@meta.data$DF_hi.lo == "Doublet" &
+      obj@meta.data[, sprintf(
+        "DF.classifications_0.25_%s_%s",
+        pK,
+        nExp_poi.adj
+        )] == "Singlet")] <- "Doublet_lo"
+    
+    obj@meta.data$DF_hi.lo[which(obj@meta.data$DF_hi.lo == "Doublet")] <-
+      "Doublet_hi"
+    
+    # remove superfluous columns
+    obj@meta.data <- obj@meta.data[, -((ncol(obj@meta.data)-6):(ncol(obj@meta.data)-1))]
+    
+    return(obj)
+  }
+  
+  compute_doublets <- function(obj) {
+    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
+    obj <- run_doublet_finder(obj)
+    return(obj)
   }
   
   options(future.globals.maxSize = Inf)
@@ -297,13 +398,14 @@ snomics_to_seurat <- function(
             obj$pct.mt <= max_mitochondrial_gene_pct &
             obj$nucleosome_signal <= max_nucleosome_signal &
             obj$TSS.enrichment >= min_tss_enrichment &
-            obj$blacklist_ratio <= max_blacklist_ratio &
-            obj$Doublet == "No"
+            obj$blacklist_ratio <= max_blacklist_ratio
     if (sum(pass) < min_cells_per_sample) {
       message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
       return(paste0(sample, " - Reason: Failed QC"))
     }
     obj <- obj[, pass]
+    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
+    obj <- run_doublet_finder(obj, doublet_rate)
     new_cells_n <- ncol(obj)
     message('\n',paste0(round(new_cells_n/orig_cells_n*100, 3), '% of cells pass QC (', new_cells_n, '/', orig_cells_n, ')'))
     return(obj)
@@ -339,6 +441,7 @@ out <- snomics_to_seurat(
   min_cells_per_sample,
   max_blacklist_ratio,
   doublet_pvalue,
+  doublet_rate,
   cores
 )
 

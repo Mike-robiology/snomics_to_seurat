@@ -60,9 +60,10 @@ process LOAD {
     --max_nucleosome_signal ${params.QC.max_nucleosome_signal} \\
     --min_tss_enrichment ${params.QC.min_tss_enrichment} \\
     --min_cells_per_sample ${params.QC.min_cells_per_sample} \\
-    --max_blacklist_ratio ${params.QC.max_blacklist_ratio}
-    --min_cells_per_sample ${params.QC.min_cells_per_sample}
-    --doublet_pvalue ${params.QC.doublet_pvalue}
+    --max_blacklist_ratio ${params.QC.max_blacklist_ratio} \\
+    --min_cells_per_sample ${params.QC.min_cells_per_sample} \\
+    --atac_doublet_pvalue ${params.QC.atac_doublet_pvalue} \\
+    --rna_doublets_per_thousand ${params.QC.rna_doublets_per_thousand}
   """
 
   stub:
