@@ -81,9 +81,10 @@ optional$add_argument("--max_nucleosome_signal")
 optional$add_argument("--min_tss_enrichment")
 optional$add_argument("--min_cells_per_sample")
 optional$add_argument("--max_blacklist_ratio")
+optional$add_argument("--filter_doublets")
 optional$add_argument("--atac_doublet_pvalue")
-optionsl$add_argument("--rna_doublet_rate")
-
+optional$add_argument("--rna_doublets_per_thousand")
+optional$add_argument("--doublet_finder_cluster_res")
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Pre-process args                                                        ####
@@ -95,6 +96,7 @@ sample_column <- args$sample_column
 gex_source <- args$gex_source
 outdir <- args$outdir
 cores <- args$cores |> as.numeric()
+filter_doublets <- args$filter_doublets
 
 min_rna_count_per_cell <- as.numeric(args$min_rna_count_per_cell)
 max_rna_count_per_cell <- as.numeric(args$max_rna_count_per_cell)
@@ -107,6 +109,7 @@ min_cells_per_sample <- as.numeric(args$min_cells_per_sample)
 max_blacklist_ratio <- as.numeric(args$max_blacklist_ratio)
 doublet_pvalue <- as.numeric(args$atac_doublet_pvalue)
 doublets_per_thousand <- as.numeric(args$rna_doublets_per_thousand)
+doublet_finder_cluster_res <- as.numeric(args$doublet_finder_cluster_res)
 
 ####function####
 snomics_to_seurat <- function(
@@ -123,8 +126,10 @@ snomics_to_seurat <- function(
   min_tss_enrichment,
   min_cells_per_sample,
   max_blacklist_ratio,
+  filter_doublets,
   doublet_pvalue,
   doublets_per_thousand,
+  doublet_finder_cluster_res,
   cores
 ) {
 
@@ -138,8 +143,30 @@ snomics_to_seurat <- function(
   message(paste0('min_tss_enrichment: ', min_tss_enrichment))
   message(paste0('min_cells_per_sample: ', min_cells_per_sample))
   message(paste0('max_blacklist_ratio: ', max_blacklist_ratio))
-  message(paste0('doublet_pvalue: ', doublet_pvalue))
-  message(paste0('doublets_per_thousand: ', doublets_per_thousand))
+
+  if (filter_doublets == "none") {
+    message('not filtering doublets')
+  } else if (filter_doublets == "atac") {
+    message('filtering doublets using atac')
+    message(paste0('atac_doublet_pvalue: ', doublet_pvalue))
+  } else if (filter_doublets == "rna"){
+    message('filtering doublets using rna')
+    message(paste0('rna_doublets_per_thousand: ', doublets_per_thousand))
+    message(paste0('doublet_finder_cluster_res: ', doublet_finder_cluster_res))
+  } else if (filter_doublets == "union") {
+    message('filtering doublets using the union of both atac and rna')
+    message(paste0('atac_doublet_pvalue: ', doublet_pvalue))
+    message(paste0('rna_doublets_per_thousand: ', doublets_per_thousand))
+    message(paste0('doublet_finder_cluster_res: ', doublet_finder_cluster_res))
+  } else if (filter_doublets == "intersection") {
+    message('filtering doublets using the intersection of both atac and rna')
+    message(paste0('atac_doublet_pvalue: ', doublet_pvalue))
+    message(paste0('rna_doublets_per_thousand: ', doublets_per_thousand))
+    message(paste0('doublet_finder_cluster_res: ', doublet_finder_cluster_res))
+  } else {
+    message("filter_doublets not one of 'none', 'atac', 'rna', 'intersection', 'union'. Proceeding without filtering doublets")
+    filter_doublets <- "none"
+  }
 
   assertthat::assert_that(
     gex_source %in% c('cellranger_arc', 'raw', 'cellbender'),
@@ -264,7 +291,9 @@ snomics_to_seurat <- function(
     
     sce <- as.SingleCellExperiment(obj)
     sce <- scDblFinder(sce, aggregateFeatures=TRUE, processing="normFeatures")
+    gc()
     res <- amulet(obj@assays$ATAC@fragments[[1]]@path,fullInMemory=TRUE)
+    gc()
     rownames(res)<-paste(unique(sce@colData$sample),rownames(res),sep="")
     res <- res[rownames(sce@colData),  ]
     res$scDblFinder.p <- 1-colData(sce)[row.names(res), "scDblFinder.score"]
@@ -282,8 +311,8 @@ snomics_to_seurat <- function(
     
     res <- res %>%
       mutate(Doublet = case_when(
-        ((p.value <= doublet_pvalue) & (scDblFinder.p <= doublet_pvalue)) ~ "Yes",
-        ((p.value >= doublet_pvalue) | (scDblFinder.p >= doublet_pvalue)) ~ "No"))
+        ((p.value <= doublet_pvalue) & (scDblFinder.p <= doublet_pvalue)) ~ "Doublet",
+        ((p.value >= doublet_pvalue) | (scDblFinder.p >= doublet_pvalue)) ~ "Singlet"))
     
     obj <- AddMetaData(
       object = obj,
@@ -295,19 +324,19 @@ snomics_to_seurat <- function(
   }
   
   # required processing for doublet finder
-  process_seurat <- function(obj) {
+  process_seurat <- function(obj, doublet_finder_cluster_res) {
     obj <- NormalizeData(obj, verbose = F) %>%
       FindVariableFeatures(selection.method = "vst", nfeatures = 2000, verbose = F) %>%
       ScaleData(verbose = F) %>%
       RunPCA(features = VariableFeatures(object = obj), verbose = F) %>%
       FindNeighbors(dims = 1:10, verbose = F) %>%
-      FindClusters(resolution = 0.1, verbose = F) %>%
+      FindClusters(resolution = doublet_finder_cluster_res, verbose = F) %>%
       RunTSNE(dims = 1:10, verbose = F)
     return(obj)
   }
   
-  run_doublet_finder <- function(obj, doublets_per_thousand) {
-    obj <- process_seurat(obj)
+  run_doublet_finder <- function(obj, doublets_per_thousand, doublet_finder_cluster_res) {
+    obj <- process_seurat(obj, doublet_finder_cluster_res)
     n_cells <- ncol(obj)
     
     # convert dpk to doublet rate
@@ -341,6 +370,7 @@ snomics_to_seurat <- function(
       reuse.pANN = FALSE,
       sct = FALSE
     )
+    gc()
     pann_hi <- sprintf("pANN_0.25_%s_%s", pK, nExp_poi)
     obj <- doubletFinder(
       obj,
@@ -351,34 +381,34 @@ snomics_to_seurat <- function(
       reuse.pANN = FALSE,
       sct = FALSE
     )
+    gc()
 
     # annotate
-    obj@meta.data[, "DF_hi.lo"] <- obj@meta.data[, sprintf(
+    obj@meta.data[, "DFDoublet"] <- obj@meta.data[, sprintf(
       "DF.classifications_0.25_%s_%s",
       pK,
       nExp_poi
     )]
     
-    obj@meta.data$DF_hi.lo[which(
-      obj@meta.data$DF_hi.lo == "Doublet" &
+    obj@meta.data$DFDoublet[which(
+      obj@meta.data$DFDoublet == "Doublet" &
       obj@meta.data[, sprintf(
         "DF.classifications_0.25_%s_%s",
         pK,
         nExp_poi.adj
         )] == "Singlet")] <- "Doublet_lo"
     
-    obj@meta.data$DF_hi.lo[which(obj@meta.data$DF_hi.lo == "Doublet")] <-
+    obj@meta.data$DFDoublet[which(obj@meta.data$DFDoublet == "Doublet")] <-
       "Doublet_hi"
+
+    colnames(obj@meta.data)[colnames(obj@meta.data) == "seurat_clusters"] <- "DF_clusters"
+
+    # remove superfluous columns and data
+    obj@meta.data <- obj@meta.data[, !grepl("^DF.classifications.*", colnames(obj@meta.data))]
+    obj@meta.data <- obj@meta.data[, !grepl("^pANN.*", colnames(obj@meta.data))]
+    obj@meta.data <- obj@meta.data[, !grepl("^RNA_snn_res.*", colnames(obj@meta.data))]
+    obj@assays$RNA@layers[grep("scale.data.+", Layers(obj))] <- NULL
     
-    # remove superfluous columns
-    obj@meta.data <- obj@meta.data[, -((ncol(obj@meta.data)-6):(ncol(obj@meta.data)-1))]
-    
-    return(obj)
-  }
-  
-  compute_doublets <- function(obj) {
-    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
-    obj <- run_doublet_finder(obj)
     return(obj)
   }
   
@@ -403,13 +433,32 @@ snomics_to_seurat <- function(
       message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
       return(paste0(sample, " - Reason: Failed QC"))
     }
+
+    obj <- AMULET_scDblFinder(obj, doublet_pvalue) # run AMULET before thresholding
+    gc()
     obj <- obj[, pass]
-    obj <- AMULET_scDblFinder(obj, doublet_pvalue)
-    obj <- run_doublet_finder(obj, doublet_rate)
     new_cells_n <- ncol(obj)
+    obj <- run_doublet_finder(obj, doublets_per_thousand, doublet_finder_cluster_res) # run doublet finder after thresholding
+    gc()
+
     message('\n',paste0(round(new_cells_n/orig_cells_n*100, 3), '% of cells pass QC (', new_cells_n, '/', orig_cells_n, ')'))
+    if (filter_doublets == "atac") {
+      obj <- obj[, obj$AMULETDoublet == "Singlet"]
+    } else if (filter_doublets == "rna") {
+      obj <- obj[, obj$DFDoublet == "Singlet"]
+    } else if (filter_doublets == "union") {
+      obj <- obj[, obj$AMULETDoublet == "Singlet" & obj$DFDoublet == "Singlet"]
+    } else if (filter_doublets == "intersection") {
+      obj <- obj[, obj$AMULETDoublet == "Singlet" | obj$DFDoublet == "Singlet"]
+    }
+
+    if (filter_doublets != "none") {
+      message('\n',paste0(round(ncol(obj)/new_cells_n*100, 3), '% of cells pass doublet filtering (', ncol(obj), '/', new_cells_n, ')'))
+    }
+
     return(obj)
   })
+  
   plan('sequential')
   gc()
   failed_samples <- unlist(obj_l[sapply(obj_l, is.character)])
@@ -440,8 +489,10 @@ out <- snomics_to_seurat(
   min_tss_enrichment,
   min_cells_per_sample,
   max_blacklist_ratio,
+  filter_doublets,
   doublet_pvalue,
-  doublet_rate,
+  doublets_per_thousand,
+  doublet_finder_cluster_res,
   cores
 )
 

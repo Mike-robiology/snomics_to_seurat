@@ -62,8 +62,10 @@ process LOAD {
     --min_cells_per_sample ${params.QC.min_cells_per_sample} \\
     --max_blacklist_ratio ${params.QC.max_blacklist_ratio} \\
     --min_cells_per_sample ${params.QC.min_cells_per_sample} \\
+    --filter_doublets ${params.QC.filter_doublets} \\
     --atac_doublet_pvalue ${params.QC.atac_doublet_pvalue} \\
-    --rna_doublets_per_thousand ${params.QC.rna_doublets_per_thousand}
+    --rna_doublets_per_thousand ${params.QC.rna_doublets_per_thousand} \\
+    --doublet_finder_cluster_res ${params.QC.doublet_finder_cluster_res}
   """
 
   stub:
