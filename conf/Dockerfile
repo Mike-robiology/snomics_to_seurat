@@ -8,3 +8,6 @@ RUN mamba env create -f conda_env.yml
 # activate env
 RUN echo "conda activate snomics_to_seurat" > ~/.bashrc
 ENV PATH /opt/conda/envs/snomics_to_seurat/bin:$PATH
+
+# install R github packages
+RUN R -e "remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')"
