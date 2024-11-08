@@ -89,7 +89,7 @@ merge_seurat <- function(
   # integrate RNA
   message('Integrating RNA (may take a while)')
   gc()
-  plan("multicore", workers = floor(cores * 0.25)) # Seurat seems to overuse cpus prior to running find anchors (need extra but not so many for parallelisation)
+  plan("multicore", workers = floor(cores * 0.2)) # Seurat seems to overuse cpus prior to running find anchors (need extra but not so many for parallelisation)
   integrated_obj <- IntegrateLayers(
     merged_obj,
     method = RPCAIntegration,

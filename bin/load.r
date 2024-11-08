@@ -330,8 +330,7 @@ snomics_to_seurat <- function(
       ScaleData(verbose = F) %>%
       RunPCA(features = VariableFeatures(object = obj), verbose = F) %>%
       FindNeighbors(dims = 1:10, verbose = F) %>%
-      FindClusters(resolution = doublet_finder_cluster_res, verbose = F) %>%
-      RunTSNE(dims = 1:10, verbose = F)
+      FindClusters(resolution = doublet_finder_cluster_res, verbose = F)
     return(obj)
   }
   
