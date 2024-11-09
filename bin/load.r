@@ -184,15 +184,14 @@ snomics_to_seurat <- function(
   sample_metadata <- metadata %>%
     group_by(!!as.symbol(sample_column), library_type) %>%
     unite('fastqs', c(fastq_1, fastq_2), sep = ',') %>%
-    summarise(fastqs = paste0(fastqs, collapse = ";"),
-              sample_ids = paste0(unique(Sample_ID), collapse = ';')) %>%
-    mutate(library_type = gsub(' ', '_', library_type)) %>%
+    mutate(sample_id = paste0(!!as.symbol(sample_column), library_type, collapse = "_"),
+              sample_ids = paste0(unique(sample_id), collapse = ';')) %>%
     pivot_wider(
       names_from = library_type,
       values_from = c(fastqs, sample_ids)
     ) %>% 
     left_join(
-      metadata %>% dplyr::select(-c(library_type, Sample_ID, fastq_1, fastq_2)),
+      metadata %>% dplyr::select(-c(library_type, fastq_1, fastq_2)),
       by = sample_column) %>%
     distinct() %>%
     as.data.frame()
@@ -201,6 +200,10 @@ snomics_to_seurat <- function(
   sample_metadata <- sample_metadata[match(samples, sample_metadata[,sample_column]),]
   samples_regex <- paste0(samples, collapse = '|')
   N <- length(samples)
+  if (N == 0) {
+    stop('No samples found in snomics_dir. check agreement between metadata and snomics_dir')
+  }
+  message(paste0(N, ' samples being processed'))
 
   if ( gex_source == 'cellranger_arc' ) {
     counts_l <- Sys.glob(paste0(snomics_dir, '/cellranger_arc/*/*/*/filtered_feature_bc_matrix'))
@@ -227,7 +230,7 @@ snomics_to_seurat <- function(
 
   message('\n|----- Recieved ATAC files -----|\n')
   message(paste0('bed: '))
-  message(bed_files)
+  message(sample_metadata$bed_file)
   message(paste0('frag: '))
   message(frag_path)
 
@@ -411,15 +414,21 @@ snomics_to_seurat <- function(
     return(obj)
   }
   
-  options(future.globals.maxSize = Inf)
-  plan("multicore", workers = cores)
   obj_l <- lapply(1:N, function(i) {
     if (is.character(obj_l[[i]])) return(obj_l[[i]])
     sample <- samples[i]
+    obj <- obj_l[[i]]
+
     message('\n|----- Computing QC ', i, '/', N, ' (', sample, ') -----|\n')
     gc()
-    obj <- compute_QC(obj_l[[i]])
-    orig_cells_n <- ncol(obj)
+    obj <- compute_QC(obj)
+
+    obj <- obj[, obj$nCount_RNA >= 10 & # first pass filter for very poor cells
+          obj$nCount_ATAC >= 10 &
+          obj$nFeature_RNA >= 5 &
+          obj$nFeature_ATAC >= 5 &
+          obj$pct.mt <= 25]
+
     pass <- obj$nCount_RNA >= min_rna_count_per_cell &
             obj$nCount_RNA <= max_rna_count_per_cell &
             obj$nCount_ATAC >= min_atac_count_per_cell &
@@ -428,19 +437,16 @@ snomics_to_seurat <- function(
             obj$nucleosome_signal <= max_nucleosome_signal &
             obj$TSS.enrichment >= min_tss_enrichment &
             obj$blacklist_ratio <= max_blacklist_ratio
-    if (sum(pass) < min_cells_per_sample) {
-      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
-      return(paste0(sample, " - Reason: Failed QC"))
-    }
 
-    obj <- AMULET_scDblFinder(obj, doublet_pvalue) # run AMULET before thresholding
+    message('\n',paste0(round(sum(pass)/ncol(obj)*100, 3), '% of cells pass QC (', sum(pass), '/', ncol(obj), ')'))
+
+    gc()
+    obj <- AMULET_scDblFinder(obj, doublet_pvalue) # run AMULET before applying thresholding
     gc()
     obj <- obj[, pass]
-    new_cells_n <- ncol(obj)
     obj <- run_doublet_finder(obj, doublets_per_thousand, doublet_finder_cluster_res) # run doublet finder after thresholding
     gc()
 
-    message('\n',paste0(round(new_cells_n/orig_cells_n*100, 3), '% of cells pass QC (', new_cells_n, '/', orig_cells_n, ')'))
     if (filter_doublets == "atac") {
       obj <- obj[, obj$AMULETDoublet == "Singlet"]
     } else if (filter_doublets == "rna") {
@@ -452,13 +458,15 @@ snomics_to_seurat <- function(
     }
 
     if (filter_doublets != "none") {
-      message('\n',paste0(round(ncol(obj)/new_cells_n*100, 3), '% of cells pass doublet filtering (', ncol(obj), '/', new_cells_n, ')'))
+      message('\n',paste0(round(ncol(obj)/sum(pass)*100, 3), '% of cells pass doublet filtering (', ncol(obj), '/', sum(pass), ')'))
     }
-
+    if (ncol(obj) < min_cells_per_sample) {
+      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
+      return(paste0(sample, " - Reason: Failed QC"))
+    }
     return(obj)
   })
-  
-  plan('sequential')
+
   gc()
   failed_samples <- unlist(obj_l[sapply(obj_l, is.character)])
   obj_l <- obj_l[sapply(obj_l, Negate(is.character))]
@@ -500,14 +508,15 @@ failed_samples <- out$failed_samples
 
 ##  ............................................................................
 ##  Save objects                                                           ####
-message(paste0("\n|----- Writing object -----|\n\noutdir: ", outdir, "/snomics_objects.qs"))
 dir.create(outdir, recursive = TRUE)
-qs::qsave(object_list, paste0(outdir, "/snomics_objects.qs"))
-if (length(failed_samples) > 0) {
-  write(
-    failed_samples,
-    paste0(outdir, "/failed_samples.txt")
-  )
+if (!is.null(failed_samples)) {
+  write(failed_samples, paste0(outdir, "/failed_samples.txt"))
+}
+if (length(object_list) != 0) {
+  message(paste0("\n|----- Writing object -----|\n\noutdir: ", outdir, "/snomics_objects.qs"))
+  qs::qsave(object_list, paste0(outdir, "/snomics_objects.qs"))
+} else {
+  message("No samples passed QC")
 }
 
 message('\n|----- Done -----|\n')

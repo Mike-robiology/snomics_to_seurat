@@ -40,7 +40,7 @@ process LOAD {
   tuple val(project_id), path(metadata_file), val(snomics_dir)
 
   output:
-  tuple val(project_id), path("${project_id}/snomics_objects.qs"), emit: outs
+  tuple val(project_id), path("${project_id}/snomics_objects.qs"), emit: outs, optional: true
   path "${project_id}/failed_samples.txt", emit: failed_samples, optional: true
 
   script:
