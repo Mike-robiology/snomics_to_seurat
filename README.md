@@ -5,3 +5,4 @@ A series of linked scripts for processing multiome nf-core-snomics output into a
 TODO:
 - model resource requirements (reason: avoids resource issues (e.g. merge odd resource requirements))
 - Add publish of macs2 consensus peaks
+- Remove superfluous individuals scale.data
