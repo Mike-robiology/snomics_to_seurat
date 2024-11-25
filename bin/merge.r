@@ -115,7 +115,7 @@ merge_seurat <- function(
   gc()
   message('Integrating ATAC (may take a while)')
   split_obj <- SplitObject(integrated_obj, sample_column)
-  plan("multicore", workers = floor(cores * 0.25)) # Seurat seems to overuse cpus prior to running find anchors
+  plan("multicore", workers = floor(cores * 0.2)) # Seurat seems to overuse cpus prior to running find anchors
   atac.anchors <- FindIntegrationAnchors(
     object.list = split_obj,
     anchor.features = rownames(split_obj[[1]]),

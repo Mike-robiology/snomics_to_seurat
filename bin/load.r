@@ -180,24 +180,21 @@ snomics_to_seurat <- function(
     sample_column %in% colnames(metadata), 
     msg = 'sample_column must be present in metadata_file'
   )
-
-  sample_metadata <- metadata %>%
-    group_by(!!as.symbol(sample_column), library_type) %>%
-    unite('fastqs', c(fastq_1, fastq_2), sep = ',') %>%
-    mutate(sample_id = paste0(!!as.symbol(sample_column), library_type, collapse = "_"),
-              sample_ids = paste0(unique(sample_id), collapse = ';')) %>%
-    pivot_wider(
-      names_from = library_type,
-      values_from = c(fastqs, sample_ids)
-    ) %>% 
-    left_join(
-      metadata %>% dplyr::select(-c(library_type, fastq_1, fastq_2)),
-      by = sample_column) %>%
-    distinct() %>%
-    as.data.frame()
+  
+  sample_reps <- table(metadata[, sample_column])
+  if (any(sample_reps > 1)) {
+    message("multiple entrys detected for samples, reducing to columns to achieve one entry per samples")
+  }
+  
+  metadata_tab <- lapply(metadata, function(x) {
+    table(metadata[, sample_column], x)
+  })
+  keep <-  sapply(metadata_tab, function(x) all(x %in% metadata_tab[[sample_column]]))
+  metadata <- metadata[, keep] |> unique()
+  
   samples <- list.dirs(paste0(snomics_dir, '/cat_fastq'), recursive = F, full.names = F)
-  samples <- samples[samples %in% sample_metadata[,sample_column]]
-  sample_metadata <- sample_metadata[match(samples, sample_metadata[,sample_column]),]
+  samples <- samples[samples %in% metadata[,sample_column]]
+  sample_metadata <- metadata[match(samples, metadata[,sample_column]),]
   samples_regex <- paste0(samples, collapse = '|')
   N <- length(samples)
   if (N == 0) {
@@ -243,13 +240,11 @@ snomics_to_seurat <- function(
   gene_table <- unique(annotation@elementMetadata[,c('gene_name', 'gene_id')])
 
   create_multi_seurat_object <- function(gex, acc, frag_path, sample_metadata) {
-    cells_n <- ncol(gex)
-    cell_metadata <- sample_metadata[rep(1, cells_n), ] |> as.data.frame()
     genes <- rownames(gex)
     genes <- c(gene_table$gene_name, genes)[match(genes, c(gene_table$gene_id, genes))]
     genes <- ave(genes, genes, FUN = function(i) ifelse(seq_along(i) == 1, i, paste0(i, '.', seq_along(i)-1))) # rename duplicate names
     rownames(gex) <- genes
-    obj <- CreateSeuratObject(counts = gex, meta.data = cell_metadata)
+    obj <- CreateSeuratObject(counts = gex)
     ChAssay <- CreateChromatinAssay(
       counts = acc,
       sep = c(":", "-"),
@@ -262,6 +257,12 @@ snomics_to_seurat <- function(
       return(paste0(sample, " - Reason: Failed to create object [", ChAssay, "]"))
     }
     obj[['ATAC']] <- ChAssay
+    
+    cell_metadata <- sample_metadata[rep(1, ncol(obj)), ] |> as.data.frame()
+    cell_metadata <- cbind.data.frame(cell_metadata, obj@meta.data)
+    rownames(cell_metadata) <- colnames(obj)
+    obj@meta.data <- cell_metadata
+    
     obj <- RenameCells(obj, new.names = paste0(obj@meta.data[1, sample_column], colnames(obj)))
     return(obj)
   }
@@ -331,7 +332,7 @@ snomics_to_seurat <- function(
     obj <- NormalizeData(obj, verbose = F) %>%
       FindVariableFeatures(selection.method = "vst", nfeatures = 2000, verbose = F) %>%
       ScaleData(verbose = F) %>%
-      RunPCA(features = VariableFeatures(object = obj), verbose = F) %>%
+      RunPCA(features = VariableFeatures(object = obj), npcs = 10, verbose = F) %>%
       FindNeighbors(dims = 1:10, verbose = F) %>%
       FindClusters(resolution = doublet_finder_cluster_res, verbose = F)
     return(obj)
@@ -443,9 +444,20 @@ snomics_to_seurat <- function(
     gc()
     obj <- AMULET_scDblFinder(obj, doublet_pvalue) # run AMULET before applying thresholding
     gc()
+
+    if (sum(pass) < min_cells_per_sample) { # first pass filter (required for sufficient cells for doublet finder)
+      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
+      return(paste0(sample, " - Reason: Failed QC"))
+    }
+
     obj <- obj[, pass]
     obj <- run_doublet_finder(obj, doublets_per_thousand, doublet_finder_cluster_res) # run doublet finder after thresholding
     gc()
+
+    if (ncol(obj) < min_cells_per_sample) { # second sample filter after doublet finder
+      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
+      return(paste0(sample, " - Reason: Failed QC"))
+    }
 
     if (filter_doublets == "atac") {
       obj <- obj[, obj$AMULETDoublet == "Singlet"]
@@ -460,10 +472,7 @@ snomics_to_seurat <- function(
     if (filter_doublets != "none") {
       message('\n',paste0(round(ncol(obj)/sum(pass)*100, 3), '% of cells pass doublet filtering (', ncol(obj), '/', sum(pass), ')'))
     }
-    if (ncol(obj) < min_cells_per_sample) {
-      message('\nSample has less than ', min_cells_per_sample, ' cells after QC (n = ', sum(pass), '), removing')
-      return(paste0(sample, " - Reason: Failed QC"))
-    }
+
     return(obj)
   })
 
